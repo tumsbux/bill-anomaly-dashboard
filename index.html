@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bill Anomaly Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1220; --panel:#171b2e; --panel2:#1e2338; --border:#2a2f4a;
+    --text:#e8eaf5; --muted:#9aa0c0; --accent:#6c8cff; --red:#ff6b6b; --amber:#ffb84d; --green:#4ade80;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:"Segoe UI",Tahoma,Arial,sans-serif; background:var(--bg); color:var(--text);
+    padding:24px; min-height:100vh;
+  }
+  h1{font-size:22px; margin:0 0 4px;}
+  .sub{color:var(--muted); font-size:13px; margin-bottom:20px;}
+  .toolbar{display:flex; gap:10px; align-items:center; margin-bottom:20px; flex-wrap:wrap;}
+  button{
+    background:var(--accent); color:#fff; border:none; padding:8px 16px; border-radius:8px;
+    font-size:13px; cursor:pointer;
+  }
+  button:hover{opacity:.9;}
+  select, input[type=text]{
+    background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:8px;
+    padding:8px 10px; font-size:13px;
+  }
+  #status{color:var(--muted); font-size:12px;}
+  .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; margin-bottom:20px;}
+  .kpi{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px;}
+  .kpi .val{font-size:28px; font-weight:700;}
+  .kpi .lbl{color:var(--muted); font-size:12px; margin-top:4px;}
+  .grid{display:grid; grid-template-columns:2fr 1fr; gap:16px; margin-bottom:16px;}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;}
+  .panel{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px;}
+  .panel h2{font-size:14px; margin:0 0 12px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.03em;}
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th,td{text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap;}
+  th{color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--panel);}
+  tr:hover td{background:var(--panel2);}
+  .badge{padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap;}
+  .badge.HIGH{background:rgba(255,107,107,.15); color:var(--red);}
+  .badge.MEDIUM{background:rgba(255,184,77,.15); color:var(--amber);}
+  .scroll{max-height:420px; overflow:auto;}
+  .rank-bar{background:var(--panel2); border-radius:6px; height:8px; overflow:hidden; margin-top:4px;}
+  .rank-bar>div{background:var(--accent); height:100%;}
+  .rank-row{margin-bottom:10px;}
+  .rank-row .top{display:flex; justify-content:space-between; font-size:13px; margin-bottom:2px;}
+  #err{color:var(--red); font-size:13px; margin-bottom:12px; display:none;}
+  canvas{max-height:280px;}
+</style>
+</head>
+<body>
+
+<h1>&#128680; Bill Anomaly Dashboard</h1>
+<div class="sub">MYPOS2018_CENTER — ตรวจจับความผิดปกติบิลขายรายชั่วโมง</div>
+
+<div class="toolbar">
+  <button onclick="loadData()">&#128260; รีเฟรชข้อมูล</button>
+  <select id="dateFilter" onchange="render()">
+    <option value="">ทุกวัน</option>
+  </select>
+  <input type="text" id="search" placeholder="ค้นหาสาขา / พนักงาน / บิล..." oninput="render()">
+  <span id="status">กำลังโหลด...</span>
+</div>
+
+<div id="err"></div>
+
+<div class="kpis">
+  <div class="kpi"><div class="val" id="kpiTotal">-</div><div class="lbl">ความผิดปกติทั้งหมด</div></div>
+  <div class="kpi"><div class="val" id="kpiHigh">-</div><div class="lbl">ส่วนลดเกิน 50% (HIGH)</div></div>
+  <div class="kpi"><div class="val" id="kpiMed">-</div><div class="lbl">นอกลิสต์สินค้า (MEDIUM)</div></div>
+  <div class="kpi"><div class="val" id="kpiBranches">-</div><div class="lbl">สาขาที่พบปัญหา</div></div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>แนวโน้มรายชั่วโมง</h2>
+    <canvas id="trendChart"></canvas>
+  </div>
+  <div class="panel">
+    <h2>แยกตามกฎ</h2>
+    <canvas id="ruleChart"></canvas>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Top 10 สาขาที่มีปัญหามากสุด</h2>
+    <div id="topBranches"></div>
+  </div>
+  <div class="panel">
+    <h2>Top 10 พนักงานที่มีปัญหามากสุด</h2>
+    <div id="topStaff"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>รายการล่าสุด</h2>
+  <div class="scroll" style="overflow-x:auto;">
+    <table>
+      <thead><tr>
+        <th>เวลา</th><th>กฎ</th><th>บิล</th><th>สาขา</th><th>พนักงาน</th>
+        <th>สินค้า</th><th>บาร์โค้ท</th><th>จำนวนขาย</th><th>ยอดขาย</th><th>ส่วนลด</th><th>%ส่วนลด</th>
+      </tr></thead>
+      <tbody id="logBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// ตั้งค่า Google Sheet ที่เก็บ log (ต้องแชร์เป็น "Anyone with the link - Viewer")
+const SHEET_ID = '1TQbRBsQ80ztc1boYNhAduMIYSA9iVdSi5aXQWTq0-Fw';
+const SHEET_NAME = 'Sheet1';
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(SHEET_NAME)}`;
+
+let rows = [];
+let trendChart, ruleChart;
+
+async function loadData(){
+  const statusEl = document.getElementById('status');
+  const errEl = document.getElementById('err');
+  errEl.style.display = 'none';
+  statusEl.textContent = 'กำลังโหลด...';
+  try{
+    const res = await fetch(CSV_URL + '&_=' + Date.now());
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    const parsed = Papa.parse(text.trim(), { skipEmptyLines: true });
+    rows = parsed.data
+      .map(r => ({
+        rule_name: (r[0]||'').trim(),
+        severity: (r[1]||'').trim(),
+        sono: (r[2]||'').trim(),
+        sodate: (r[3]||'').trim(),
+        sotime: (r[4]||'').trim(),
+        uname: (r[5]||'').trim().replace(/^'/,''),
+        sotowhs: (r[6]||'').trim().replace(/^'/,''),
+        detail: (r[7]||'').trim(),
+      }))
+      .filter(r => r.rule_name && r.sono);
+
+    populateDateFilter();
+    render();
+    statusEl.textContent = `อัปเดตล่าสุด: ${new Date().toLocaleString('th-TH')} • ${rows.length} รายการทั้งหมด`;
+  }catch(e){
+    errEl.style.display = 'block';
+    errEl.textContent = 'โหลดข้อมูลไม่สำเร็จ: ' + e.message + ' — ตรวจสอบว่า Google Sheet แชร์เป็น "Anyone with the link" แล้ว';
+    statusEl.textContent = '';
+  }
+}
+
+function populateDateFilter(){
+  const sel = document.getElementById('dateFilter');
+  const current = sel.value;
+  const dates = [...new Set(rows.map(r => r.sodate))].sort().reverse();
+  sel.innerHTML = '<option value="">ทุกวัน</option>' + dates.map(d => `<option value="${d}">${d}</option>`).join('');
+  sel.value = current && dates.includes(current) ? current : '';
+}
+
+function getFiltered(){
+  const dateVal = document.getElementById('dateFilter').value;
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  return rows.filter(r => {
+    if (dateVal && r.sodate !== dateVal) return false;
+    if (q && !(r.sono.toLowerCase().includes(q) || r.sotowhs.toLowerCase().includes(q) || r.uname.toLowerCase().includes(q) || r.detail.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+function render(){
+  const data = getFiltered();
+
+  document.getElementById('kpiTotal').textContent = data.length;
+  document.getElementById('kpiHigh').textContent = data.filter(r => r.severity === 'HIGH').length;
+  document.getElementById('kpiMed').textContent = data.filter(r => r.severity === 'MEDIUM').length;
+  document.getElementById('kpiBranches').textContent = new Set(data.map(r => r.sotowhs)).size;
+
+  renderTrend(data);
+  renderRuleChart(data);
+  renderTop('topBranches', data, 'sotowhs', 'สาขา');
+  renderTop('topStaff', data, 'uname', 'พนักงาน');
+  renderLog(data);
+}
+
+function renderTrend(data){
+  const byHour = {};
+  data.forEach(r => {
+    const hour = (r.sotime || '00:00').split(':')[0];
+    const key = r.sodate + ' ' + hour + ':00';
+    byHour[key] = (byHour[key]||0) + 1;
+  });
+  const labels = Object.keys(byHour).sort();
+  const values = labels.map(l => byHour[l]);
+
+  const ctx = document.getElementById('trendChart');
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets: [{ label: 'จำนวนความผิดปกติ', data: values, borderColor: '#6c8cff', backgroundColor: 'rgba(108,140,255,.15)', fill: true, tension: .3 }] },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#9aa0c0', maxRotation: 60, minRotation: 60 }, grid: { color: '#2a2f4a' } },
+        y: { beginAtZero: true, ticks: { color: '#9aa0c0', precision: 0 }, grid: { color: '#2a2f4a' } }
+      }
+    }
+  });
+}
+
+function renderRuleChart(data){
+  const byRule = {};
+  data.forEach(r => { byRule[r.rule_name] = (byRule[r.rule_name]||0) + 1; });
+  const labels = Object.keys(byRule);
+  const values = labels.map(l => byRule[l]);
+
+  const ctx = document.getElementById('ruleChart');
+  if (ruleChart) ruleChart.destroy();
+  ruleChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data: values, backgroundColor: ['#ff6b6b','#ffb84d','#4ade80','#6c8cff'] }] },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { color: '#e8eaf5', boxWidth: 12, font:{size:11} } } }
+    }
+  });
+}
+
+function renderTop(elId, data, field, label){
+  const counts = {};
+  data.forEach(r => { const v = r[field] || '(ไม่ระบุ)'; counts[v] = (counts[v]||0) + 1; });
+  const entries = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, 10);
+  const max = entries.length ? entries[0][1] : 1;
+  const el = document.getElementById(elId);
+  if (!entries.length){ el.innerHTML = '<div style="color:var(--muted);font-size:13px;">ไม่มีข้อมูล</div>'; return; }
+  el.innerHTML = entries.map(([name, count]) => `
+    <div class="rank-row">
+      <div class="top"><span>${label} ${name}</span><span>${count}</span></div>
+      <div class="rank-bar"><div style="width:${(count/max*100).toFixed(0)}%"></div></div>
+    </div>
+  `).join('');
+}
+
+// แกะรายละเอียดจากข้อความ detail เป็นฟิลด์แยก (ชื่อสินค้า/บาร์โค้ท/จำนวน/ยอดขาย/ส่วนลด/%ส่วนลด)
+function parseDetail(text){
+  const out = { name:'', barcode:'', qty:'', amt:'', disc:'', pct:'' };
+  if (!text) return out;
+
+  // กฎ "สินค้านอกเหนือลิสต์" แบบใหม่ (มีราคาขาย/ราคาลด/%)
+  let m = text.match(/^(.*?) - barcode (\S+) ไม่อยู่ในลิสต์สินค้า \(\d+ รายการ\) qty=([\d.]+) ราคาขาย=([\d.]+) ราคาลด=([\d.]+) \(([\d.]+)%\) ยอด=([\d.]+)/);
+  if (m){ out.name=m[1]; out.barcode=m[2]; out.qty=m[3]; out.disc=m[5]; out.pct=m[6]; out.amt=m[7]; return out; }
+
+  // กฎ "สินค้านอกเหนือลิสต์" แบบเก่า (ไม่มีราคา)
+  m = text.match(/^(.*?) - barcode (\S+) ไม่อยู่ในลิสต์สินค้า \(\d+ รายการ\) qty=([\d.]+) ยอด=([\d.]+)/);
+  if (m){ out.name=m[1]; out.barcode=m[2]; out.qty=m[3]; out.amt=m[4]; return out; }
+
+  // กฎ "ส่วนลดเกิน 50%" — "{ชื่อ} - ลด {pct}% (ราคา {unit} / ลด {disc})"
+  m = text.match(/^(.*?) - ลด ([\d.]+)% \(ราคา ([\d,.]+) \/ ลด ([\d,.]+)\)/);
+  if (m){ out.name=m[1]; out.pct=m[2]; out.amt=m[3]; out.disc=m[4]; return out; }
+
+  out.name = text;
+  return out;
+}
+
+function renderLog(data){
+  const sorted = [...data].sort((a,b) => (b.sodate+b.sotime).localeCompare(a.sodate+a.sotime)).slice(0, 100);
+  const tbody = document.getElementById('logBody');
+  if (!sorted.length){ tbody.innerHTML = '<tr><td colspan="11" style="color:var(--muted)">ไม่มีข้อมูล</td></tr>'; return; }
+  tbody.innerHTML = sorted.map(r => {
+    const d = parseDetail(r.detail);
+    return `
+    <tr>
+      <td>${r.sodate} ${r.sotime}</td>
+      <td><span class="badge ${r.severity}">${r.rule_name}</span></td>
+      <td>${r.sono}</td>
+      <td>${r.sotowhs}</td>
+      <td>${r.uname}</td>
+      <td>${d.name}</td>
+      <td>${d.barcode}</td>
+      <td>${d.qty}</td>
+      <td>${d.amt}</td>
+      <td>${d.disc}</td>
+      <td>${d.pct ? d.pct + '%' : ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+loadData();
+setInterval(loadData, 5 * 60 * 1000); // auto-refresh ทุก 5 นาที
+</script>
+</body>
+</html>
